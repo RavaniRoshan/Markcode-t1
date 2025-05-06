@@ -13,16 +13,15 @@ import {
   MessageReader,
   MessageWriter,
 } from 'vscode-languageserver'
-import { 
-  WebSocketMessageReader, 
-  WebSocketMessageWriter, 
-  IWebSocket,
-  createMessageConnection
-} from 'vscode-ws-jsonrpc'
 import { createServer } from 'http'
 import { URL } from 'url'
 import { lspServer } from './src/lspServer.js'
 import { TextDocument } from 'vscode-languageserver-textdocument'
+import dotenv from 'dotenv';
+import { Client } from 'pg';
+import { WebSocketMessageReader, WebSocketMessageWriter, createMessageConnection } from 'vscode-ws-jsonrpc'
+
+dotenv.config();
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -40,91 +39,97 @@ const wss = new WebSocketServer({
   path: '/lsp',
 })
 
-function toSocket(webSocket: WebSocket): IWebSocket {
-  return {
-    send: (content: string) => webSocket.send(content),
-    onMessage: (callback: (data: string) => void) => {
-      webSocket.on('message', (data: Buffer | string | any) => {
-        if (Buffer.isBuffer(data)) {
-          callback(data.toString('utf-8'))
-        } else if (typeof data === 'string') {
-          callback(data)
-        } else {
-          callback(JSON.stringify(data))
-        }
-      })
-      return webSocket
-    },
-    onError: (callback: (error: Error) => void) => {
-      webSocket.on('error', callback)
-      return webSocket
-    },
-    onClose: (callback: (code: number, reason: string) => void) => {
-      webSocket.on('close', (code: number, reason: string) => callback(code, reason))
-      return webSocket
-    },
-    dispose: () => {
-      webSocket.close()
-    }
-  }
-}
-
 wss.on('connection', (ws: WebSocket, req) => {
   const url = new URL(req.url!, `http://${req.headers.host}`)
   const path = url.pathname
 
   if (path === '/lsp') {
-    const socket = toSocket(ws)
-    const messageReader = new WebSocketMessageReader(socket) as unknown as MessageReader
-    const messageWriter = new WebSocketMessageWriter(socket) as unknown as MessageWriter
+    // Create connection with proper message reader/writer setup
+    const socket = {
+      send: (content: string) => ws.send(content),
+      onMessage: (cb: (data: string) => void) => {
+        ws.on('message', (data) => {
+          if (Buffer.isBuffer(data)) {
+            cb(data.toString())
+          } else if (typeof data === 'string') {
+            cb(data)
+          }
+        })
+      },
+      onError: (cb: (error: Error) => void) => ws.on('error', cb),
+      onClose: (cb: () => void) => ws.on('close', cb),
+      dispose: () => ws.close()
+    }
 
-    // Create a JSON-RPC connection
-    const jsonRpcConnection = createMessageConnection(messageReader, messageWriter)
-    
-    // Create an LSP connection
-    const connection = createConnection(ProposedFeatures.all)
+    const reader = new WebSocketMessageReader(socket)
+    const writer = new WebSocketMessageWriter(socket)
 
-    // Forward messages between JSON-RPC and LSP connections
-    jsonRpcConnection.onRequest((method, params) => {
-      return connection.sendRequest(method, params)
-    })
+    // Create the LSP connection
+    const connection = createConnection(
+      (reader as unknown) as MessageReader,
+      (writer as unknown) as MessageWriter
+    )
 
-    jsonRpcConnection.onNotification((method, params) => {
-      connection.sendNotification(method, params)
-    })
-
-    connection.onRequest((method, params) => {
-      return jsonRpcConnection.sendRequest(method, params)
-    })
-
-    connection.onNotification((method, params) => {
-      jsonRpcConnection.sendNotification(method, params)
-    })
-
-    // Create a text document manager
+    // Setup document manager
     const documents = new TextDocuments(TextDocument)
-
-    // Make the text document manager listen on the connection
     documents.listen(connection)
 
-    // Initialize the LSP server with the connection
+    // Initialize the LSP server
     lspServer(connection)
 
-    // Start listening on both connections
-    jsonRpcConnection.listen()
+    // Start listening
     connection.listen()
 
-    // Handle WebSocket close
+    // Handle cleanup
     ws.on('close', () => {
-      messageReader.dispose()
-      messageWriter.dispose()
-      jsonRpcConnection.dispose()
+      reader.dispose()
+      writer.dispose()
       connection.dispose()
     })
   }
 })
 
+// PostgreSQL client setup
+const client = new Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+async function testConnection() {
+  try {
+    await client.connect();
+    console.log('Connected to Neon Postgres!');
+    const res = await client.query('SELECT NOW()');
+    console.log('Server time:', res.rows[0]);
+    await client.end();
+  } catch (err) {
+    console.error('Database connection error:', err);
+  }
+}
+
+testConnection()
+
+// Sample API endpoint to get current time from Neon Postgres
+app.get('/api/time', async (req, res) => {
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
+  try {
+    await client.connect();
+    const result = await client.query('SELECT NOW()');
+    await client.end();
+    res.json({ time: result.rows[0].now });
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      res.status(500).json({ error: 'Database error', details: err.message });
+    } else {
+      res.status(500).json({ error: 'Database error', details: String(err) });
+    }
+  }
+});
+
 // Start the server
 server.listen(port, () => {
   console.log(`Server running on port ${port}`)
-}) 
+})
