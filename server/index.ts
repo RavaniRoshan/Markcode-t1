@@ -3,23 +3,21 @@ import cors from 'cors'
 import { WebSocket, WebSocketServer } from 'ws'
 import {
   createConnection,
-  TextDocuments,
   ProposedFeatures,
   InitializeParams,
   TextDocumentSyncKind,
   InitializeResult,
   Logger,
-  Connection,
-  MessageReader,
-  MessageWriter,
+  ProtocolConnection,
+  TextDocuments
 } from 'vscode-languageserver'
+import { TextDocument } from 'vscode-languageserver-textdocument'
 import { createServer } from 'http'
 import { URL } from 'url'
+import { WebSocketMessageReader, WebSocketMessageWriter } from 'vscode-ws-jsonrpc'
 import { lspServer } from './src/lspServer.js'
-import { TextDocument } from 'vscode-languageserver-textdocument'
-import dotenv from 'dotenv';
-import { Client } from 'pg';
-import { WebSocketMessageReader, WebSocketMessageWriter, createMessageConnection } from 'vscode-ws-jsonrpc'
+import dotenv from 'dotenv'
+import { Client } from 'pg'
 
 dotenv.config();
 
@@ -44,38 +42,38 @@ wss.on('connection', (ws: WebSocket, req) => {
   const path = url.pathname
 
   if (path === '/lsp') {
-    // Create connection with proper message reader/writer setup
     const socket = {
       send: (content: string) => ws.send(content),
       onMessage: (cb: (data: string) => void) => {
         ws.on('message', (data) => {
-          if (Buffer.isBuffer(data)) {
-            cb(data.toString())
-          } else if (typeof data === 'string') {
-            cb(data)
-          }
+          const content = Buffer.isBuffer(data) ? data.toString() : data
+          cb(typeof content === 'string' ? content : JSON.stringify(content))
         })
       },
       onError: (cb: (error: Error) => void) => ws.on('error', cb),
-      onClose: (cb: () => void) => ws.on('close', cb),
+      onClose: (cb: (code: number, reason: string) => void) => ws.on('close', (code, reason) => {
+        const reasonStr = Buffer.isBuffer(reason) ? reason.toString('utf-8') : String(reason || '')
+        cb(code, reasonStr)
+      }),
       dispose: () => ws.close()
     }
 
     const reader = new WebSocketMessageReader(socket)
     const writer = new WebSocketMessageWriter(socket)
 
-    // Create the LSP connection
-    const connection = createConnection(
-      (reader as unknown) as MessageReader,
-      (writer as unknown) as MessageWriter
-    )
-
+    // Create connection with proper message transport
+    const messageTransport = {
+      reader,
+      writer
+    }
+    const connection = createConnection(messageTransport, ProposedFeatures.all)
+    
     // Setup document manager
     const documents = new TextDocuments(TextDocument)
     documents.listen(connection)
 
     // Initialize the LSP server
-    lspServer(connection)
+    lspServer(connection as any)
 
     // Start listening
     connection.listen()
