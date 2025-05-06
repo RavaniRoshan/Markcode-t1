@@ -78,7 +78,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
       state.workspace,
       filename,
       content,
-      (status) => set((state) => ({
+      (status: 'saved' | 'saving' | 'unsaved') => set((state) => ({
         saveStatus: { ...state.saveStatus, [filename]: status }
       }))
     )
