@@ -1,9 +1,9 @@
-import React, { useState } from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
-import { Dashboard } from './pages/Dashboard'
-import { Workspace } from './pages/Workspace'
-import TopBar from './components/TopBar'
-import Terminal from './components/Terminal'
+import React, { useState } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Dashboard } from './pages/Dashboard';
+import { Workspace } from './pages/Workspace';
+import TopBar from './components/TopBar';
+import Terminal from './components/Terminal';
 
 function App() {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
